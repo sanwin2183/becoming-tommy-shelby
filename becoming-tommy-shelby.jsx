@@ -5,28 +5,29 @@ import { auth, db } from "./firebase";
 import AuthScreen from "./AuthScreen";
 
 const DAILY_MISSIONS = [
-  { id: 1, time: "05:00", label: "WAKE UP", command: "Get out of bed. No snooze. Feet on the floor.", duration: 5, category: "wake" },
-  { id: 2, time: "05:05", label: "COLD WATER", command: "Splash cold water on your face. Wake the mind.", duration: 3, category: "wake" },
-  { id: 3, time: "05:10", label: "BREATHE", command: "10 deep breaths. Slow in. Slow out. Control yourself.", duration: 5, category: "wake" },
-  { id: 4, time: "05:15", label: "PLAN THE DAY", command: "Write 3 priorities. Nothing else matters today.", duration: 10, category: "work" },
-  { id: 5, time: "05:30", label: "MOVE YOUR BODY", command: "30 minutes. Push-ups, pull-ups, run. No excuses.", duration: 30, category: "exercise" },
-  { id: 6, time: "06:00", label: "CLEAN YOURSELF", command: "Cold shower. Stand in it. Don't flinch.", duration: 15, category: "wake" },
-  { id: 7, time: "06:30", label: "EAT CLEAN", command: "Simple meal. Protein. No sugar. No garbage.", duration: 20, category: "rest" },
-  { id: 8, time: "07:00", label: "DEEP WORK — BLOCK 1", command: "Phone off. Door closed. Execute your first priority.", duration: 120, category: "work" },
-  { id: 9, time: "09:00", label: "BREAK", command: "Stand. Stretch. Water. 10 minutes only.", duration: 10, category: "rest" },
-  { id: 10, time: "09:10", label: "DEEP WORK — BLOCK 2", command: "Back to it. Second priority. No distractions.", duration: 120, category: "work" },
-  { id: 11, time: "11:10", label: "WALK", command: "20 minutes outside. No phone. Just think.", duration: 20, category: "exercise" },
-  { id: 12, time: "11:30", label: "DEEP WORK — BLOCK 3", command: "Third priority. Finish what you started.", duration: 90, category: "work" },
-  { id: 13, time: "13:00", label: "EAT", command: "Fuel the machine. Clean food only.", duration: 30, category: "rest" },
-  { id: 14, time: "13:30", label: "LEARN", command: "Read or study for 45 minutes. Sharpen the blade.", duration: 45, category: "work" },
-  { id: 15, time: "14:15", label: "EXECUTE", command: "Handle all remaining tasks. Emails. Calls. Admin.", duration: 105, category: "work" },
-  { id: 16, time: "16:00", label: "TRAIN", command: "Second session. Push harder than this morning.", duration: 45, category: "exercise" },
-  { id: 17, time: "17:00", label: "REST & RECOVER", command: "You've earned a pause. Stretch. Hydrate.", duration: 30, category: "rest" },
-  { id: 18, time: "17:30", label: "SKILL WORK", command: "Work on your craft. Build something. Create.", duration: 90, category: "work" },
-  { id: 19, time: "19:00", label: "EVENING MEAL", command: "Last meal. Keep it clean.", duration: 30, category: "rest" },
-  { id: 20, time: "19:30", label: "REFLECT", command: "Journal. What worked. What didn't. Be honest.", duration: 15, category: "rest" },
-  { id: 21, time: "21:00", label: "SHUT DOWN", command: "Phone off. Screens off. Prepare for sleep.", duration: 30, category: "rest" },
-  { id: 22, time: "21:30", label: "SLEEP", command: "Lights out. Tomorrow we go again.", duration: 0, category: "rest" },
+  { id: 1,  time: "05:00", label: "WAKE UP",          command: "Get out of bed. No snooze. Feet on the floor.", duration: 5,   category: "wake" },
+  { id: 2,  time: "05:05", label: "COLD WATER",        command: "Splash cold water on your face. Shock the system awake.", duration: 3,   category: "wake" },
+  { id: 3,  time: "05:08", label: "MEDITATE",          command: "Sit still. Eyes closed. 15 minutes. Breathe and clear the noise.", duration: 15,  category: "wake" },
+  { id: 4,  time: "05:23", label: "PLAN THE DAY",      command: "Write 3 priorities. Nothing else matters today.", duration: 15,  category: "work" },
+  { id: 5,  time: "05:38", label: "STRETCH & WARM UP", command: "Mobilise your joints. Warm up before the gym. Don't skip this.", duration: 22,  category: "exercise" },
+  { id: 6,  time: "06:00", label: "GYM",               command: "One hour. Heavy and focused. This is where strength is built.", duration: 60,  category: "exercise" },
+  { id: 7,  time: "07:00", label: "SHOWER",            command: "Cold shower. 20 minutes. Stand in it. Wash it all off.", duration: 20,  category: "wake" },
+  { id: 8,  time: "07:20", label: "EAT CLEAN",         command: "Simple meal. Protein. No sugar. No garbage. Fuel the machine.", duration: 20,  category: "rest" },
+  { id: 9,  time: "07:40", label: "DEEP WORK — BLOCK 1", command: "Phone off. Door closed. Execute your first priority.", duration: 120, category: "work" },
+  { id: 10, time: "09:40", label: "BREAK",             command: "Stand. Stretch. Water. 10 minutes only.", duration: 10,  category: "rest" },
+  { id: 11, time: "09:50", label: "DEEP WORK — BLOCK 2", command: "Back to it. Second priority. No distractions.", duration: 120, category: "work" },
+  { id: 12, time: "11:50", label: "WALK",              command: "20 minutes outside. No phone. Let your mind breathe.", duration: 20,  category: "exercise" },
+  { id: 13, time: "12:10", label: "DEEP WORK — BLOCK 3", command: "Third priority. Finish what you started.", duration: 80,  category: "work" },
+  { id: 14, time: "13:30", label: "EAT",               command: "Fuel the machine. Clean food only.", duration: 30,  category: "rest" },
+  { id: 15, time: "14:00", label: "LEARN",             command: "Read or study for 45 minutes. Sharpen the blade.", duration: 45,  category: "work" },
+  { id: 16, time: "14:45", label: "EXECUTE",           command: "Handle all remaining tasks. Emails. Calls. Admin.", duration: 75,  category: "work" },
+  { id: 17, time: "16:00", label: "SECOND TRAINING",   command: "Second session. Push harder than this morning.", duration: 45,  category: "exercise" },
+  { id: 18, time: "16:45", label: "REST & RECOVER",    command: "You've earned a pause. Stretch. Hydrate. Breathe.", duration: 30,  category: "rest" },
+  { id: 19, time: "17:15", label: "SKILL WORK",        command: "Work on your craft. Build something. Create value.", duration: 90,  category: "work" },
+  { id: 20, time: "18:45", label: "EVENING MEAL",      command: "Last meal. Keep it clean. No junk.", duration: 30,  category: "rest" },
+  { id: 21, time: "19:15", label: "REFLECT",           command: "Journal. What worked. What didn't. Be brutally honest.", duration: 30,  category: "rest" },
+  { id: 22, time: "21:00", label: "SHUT DOWN",         command: "Phone off. Screens off. Prepare your mind for sleep.", duration: 30,  category: "rest" },
+  { id: 23, time: "21:30", label: "SLEEP",             command: "Lights out. Rest hard. Tomorrow we go again.", duration: 0,   category: "rest" },
 ];
 
 const DEBRIEF_QUESTIONS = [
@@ -87,12 +88,40 @@ export default function BecomingTommyShelby() {
   const [nameUpdateMsg, setNameUpdateMsg] = useState("");
   const [leaderboard, setLeaderboard] = useState([]);
   const [leaderboardLoading, setLeaderboardLoading] = useState(false);
+  const [notifPermission, setNotifPermission] = useState(
+    typeof Notification !== "undefined" ? Notification.permission : "denied"
+  );
+  const lastNotifMinRef = useRef(-1);
 
   // Clock
   useEffect(() => {
     const t = setInterval(() => setNow(new Date()), 1000);
     return () => clearInterval(t);
   }, []);
+
+  // Mission alarm — fires a notification at the start of each mission
+  useEffect(() => {
+    if (!loaded || !user) return;
+    if (typeof Notification === "undefined" || Notification.permission !== "granted") return;
+    const h = now.getHours();
+    const m = now.getMinutes();
+    const nowMin = h * 60 + m;
+    if (nowMin === lastNotifMinRef.current) return;
+    const hit = DAILY_MISSIONS.find(ms => {
+      const [mh, mm] = ms.time.split(":").map(Number);
+      return mh * 60 + mm === nowMin;
+    });
+    if (hit) {
+      lastNotifMinRef.current = nowMin;
+      new Notification(`⏱ ${hit.label}`, { body: hit.command, icon: "/favicon.ico" });
+    }
+  }, [now, loaded, user]);
+
+  const enableNotifications = async () => {
+    if (typeof Notification === "undefined") return;
+    const result = await Notification.requestPermission();
+    setNotifPermission(result);
+  };
 
   // Auth state listener
   useEffect(() => {
@@ -340,6 +369,13 @@ export default function BecomingTommyShelby() {
           </div>
         </div>
         <div style={styles.headerRight}>
+          <button
+            onClick={enableNotifications}
+            title={notifPermission === "granted" ? "Alarms on" : notifPermission === "denied" ? "Alarms blocked in browser settings" : "Enable mission alarms"}
+            style={styles.bellBtn}
+          >
+            {notifPermission === "granted" ? "🔔" : "🔕"}
+          </button>
           <div style={styles.streakBadge}>
             <span style={styles.streakNum}>{dayState.streak}</span>
             <span style={styles.streakLabel}>DAY STREAK</span>
@@ -1434,6 +1470,15 @@ const styles = {
     fontSize: "14px",
     letterSpacing: "2px",
     cursor: "pointer",
+  },
+  bellBtn: {
+    background: "none",
+    border: "1px solid #2A2A2A",
+    borderRadius: "4px",
+    cursor: "pointer",
+    fontSize: "18px",
+    padding: "4px 8px",
+    lineHeight: 1,
   },
   accountAvatarBtn: {
     background: "none",
