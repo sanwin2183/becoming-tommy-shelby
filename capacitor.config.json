@@ -1,0 +1,15 @@
+{
+  "appId": "com.becomingstommyshelby.app",
+  "appName": "Becoming Tommy Shelby",
+  "webDir": "dist",
+  "server": {
+    "androidScheme": "https"
+  },
+  "plugins": {
+    "SplashScreen": {
+      "launchShowDuration": 2000,
+      "backgroundColor": "#0A0A0A",
+      "showSpinner": false
+    }
+  }
+}
