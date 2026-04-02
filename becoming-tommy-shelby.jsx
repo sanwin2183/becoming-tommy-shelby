@@ -197,6 +197,21 @@ export default function BecomingTommyShelby() {
       .finally(() => setLeaderboardLoading(false));
   }, [view === "leaderboard" ? view : null, user]);
 
+  // Save permanent debrief history when debrief is completed
+  useEffect(() => {
+    if (!dayState.debriefDone || !user || !loaded) return;
+    setDoc(doc(db, "users", user.uid, "history", dayState.date), {
+      date: dayState.date,
+      debrief: dayState.debriefAnswers,
+      missionsCompleted: dayState.completed.length,
+      missionsFailed: dayState.failed.length,
+      ruleViolations: dayState.ruleViolations,
+      urgeCount: dayState.urgeCount,
+      streak: dayState.streak,
+      savedAt: serverTimestamp(),
+    }).catch(() => {});
+  }, [dayState.debriefDone, user, loaded]);
+
   // Auto-detect current mission by time
   useEffect(() => {
     const h = now.getHours();
@@ -290,7 +305,8 @@ export default function BecomingTommyShelby() {
   };
 
   const submitDebrief = () => {
-    const answers = [...dayState.debriefAnswers, debriefInput];
+    const entry = { question: DEBRIEF_QUESTIONS[debriefStep], answer: debriefInput };
+    const answers = [...dayState.debriefAnswers, entry];
     setDebriefInput("");
     if (debriefStep < DEBRIEF_QUESTIONS.length - 1) {
       setDebriefStep(debriefStep + 1);
@@ -581,10 +597,10 @@ export default function BecomingTommyShelby() {
                 <div style={styles.debriefDoneIcon}>✓</div>
                 <p style={styles.debriefDoneText}>Debrief complete. Rest now.</p>
                 <div style={styles.debriefAnswersList}>
-                  {DEBRIEF_QUESTIONS.map((q, i) => (
+                  {dayState.debriefAnswers.map((entry, i) => (
                     <div key={i} style={styles.debriefReview}>
-                      <div style={styles.debriefQ}>{q}</div>
-                      <div style={styles.debriefA}>{dayState.debriefAnswers[i] || "—"}</div>
+                      <div style={styles.debriefQ}>{entry.question || entry}</div>
+                      <div style={styles.debriefA}>{entry.answer || "—"}</div>
                     </div>
                   ))}
                 </div>
