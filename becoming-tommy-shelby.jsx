@@ -3,32 +3,9 @@ import { onAuthStateChanged, signOut, updateProfile } from "firebase/auth";
 import { doc, getDoc, setDoc, collection, getDocs, serverTimestamp } from "firebase/firestore";
 import { auth, db } from "./firebase";
 import AuthScreen from "./AuthScreen";
-
-const DAILY_MISSIONS = [
-  { id: 1,  time: "05:00", label: "WAKE UP",          command: "Get out of bed. No snooze. Feet on the floor.", duration: 5,   category: "wake" },
-  { id: 2,  time: "05:05", label: "COLD WATER",        command: "Splash cold water on your face. Shock the system awake.", duration: 3,   category: "wake" },
-  { id: 3,  time: "05:08", label: "MEDITATE",          command: "Sit still. Eyes closed. 15 minutes. Breathe and clear the noise.", duration: 15,  category: "wake" },
-  { id: 4,  time: "05:23", label: "PLAN THE DAY",      command: "Write 3 priorities. Nothing else matters today.", duration: 15,  category: "work" },
-  { id: 5,  time: "05:38", label: "STRETCH & WARM UP", command: "Mobilise your joints. Warm up before the gym. Don't skip this.", duration: 22,  category: "exercise" },
-  { id: 6,  time: "06:00", label: "GYM",               command: "One hour. Heavy and focused. This is where strength is built.", duration: 60,  category: "exercise" },
-  { id: 7,  time: "07:00", label: "SHOWER",            command: "Cold shower. 20 minutes. Stand in it. Wash it all off.", duration: 20,  category: "wake" },
-  { id: 8,  time: "07:20", label: "EAT CLEAN",         command: "Simple meal. Protein. No sugar. No garbage. Fuel the machine.", duration: 20,  category: "rest" },
-  { id: 9,  time: "07:40", label: "DEEP WORK — BLOCK 1", command: "Phone off. Door closed. Execute your first priority.", duration: 120, category: "work" },
-  { id: 10, time: "09:40", label: "BREAK",             command: "Stand. Stretch. Water. 10 minutes only.", duration: 10,  category: "rest" },
-  { id: 11, time: "09:50", label: "DEEP WORK — BLOCK 2", command: "Back to it. Second priority. No distractions.", duration: 120, category: "work" },
-  { id: 12, time: "11:50", label: "WALK",              command: "20 minutes outside. No phone. Let your mind breathe.", duration: 20,  category: "exercise" },
-  { id: 13, time: "12:10", label: "DEEP WORK — BLOCK 3", command: "Third priority. Finish what you started.", duration: 80,  category: "work" },
-  { id: 14, time: "13:30", label: "EAT",               command: "Fuel the machine. Clean food only.", duration: 30,  category: "rest" },
-  { id: 15, time: "14:00", label: "LEARN",             command: "Read or study for 45 minutes. Sharpen the blade.", duration: 45,  category: "work" },
-  { id: 16, time: "14:45", label: "EXECUTE",           command: "Handle all remaining tasks. Emails. Calls. Admin.", duration: 75,  category: "work" },
-  { id: 17, time: "16:00", label: "SECOND TRAINING",   command: "Second session. Push harder than this morning.", duration: 45,  category: "exercise" },
-  { id: 18, time: "16:45", label: "REST & RECOVER",    command: "You've earned a pause. Stretch. Hydrate. Breathe.", duration: 30,  category: "rest" },
-  { id: 19, time: "17:15", label: "SKILL WORK",        command: "Work on your craft. Build something. Create value.", duration: 90,  category: "work" },
-  { id: 20, time: "18:45", label: "EVENING MEAL",      command: "Last meal. Keep it clean. No junk.", duration: 30,  category: "rest" },
-  { id: 21, time: "19:15", label: "REFLECT",           command: "Journal. What worked. What didn't. Be brutally honest.", duration: 30,  category: "rest" },
-  { id: 22, time: "21:00", label: "SHUT DOWN",         command: "Phone off. Screens off. Prepare your mind for sleep.", duration: 30,  category: "rest" },
-  { id: 23, time: "21:30", label: "SLEEP",             command: "Lights out. Rest hard. Tomorrow we go again.", duration: 0,   category: "rest" },
-];
+import Onboarding from "./Onboarding";
+import ScheduleEditor from "./ScheduleEditor";
+import { CATEGORIES, TEMPLATES, shiftMissions, applyAddOns } from "./templates";
 
 const DEBRIEF_QUESTIONS = [
   "Did you execute all three priorities today?",
@@ -92,6 +69,8 @@ export default function BecomingTommyShelby() {
     typeof Notification !== "undefined" ? Notification.permission : "denied"
   );
   const lastNotifMinRef = useRef(-1);
+  const [schedule, setSchedule] = useState(null); // null=loading, false=no schedule, object=loaded
+  const [showEditor, setShowEditor] = useState(false);
 
   // Clock
   useEffect(() => {
@@ -107,7 +86,7 @@ export default function BecomingTommyShelby() {
     const m = now.getMinutes();
     const nowMin = h * 60 + m;
     if (nowMin === lastNotifMinRef.current) return;
-    const hit = DAILY_MISSIONS.find(ms => {
+    const hit = (schedule?.missions || []).find(ms => {
       const [mh, mm] = ms.time.split(":").map(Number);
       return mh * 60 + mm === nowMin;
     });
@@ -128,7 +107,7 @@ export default function BecomingTommyShelby() {
     const unsub = onAuthStateChanged(auth, (u) => {
       setUser(u);
       setAuthLoading(false);
-      if (!u) setLoaded(false); // reset when signed out
+      if (!u) { setLoaded(false); setSchedule(null); } // reset when signed out
     });
     return unsub;
   }, []);
@@ -145,8 +124,9 @@ export default function BecomingTommyShelby() {
           if (parsed.date === todayKey()) {
             setDayState(parsed);
           } else {
-            // New day — carry streak
-            const wasGoodDay = parsed.failed.length === 0 && parsed.completed.length >= 10;
+            // New day — carry streak (70% threshold)
+            const prevTotal = parsed.totalMissions || 10;
+            const wasGoodDay = parsed.completed.length / prevTotal >= 0.7;
             const newStreak = wasGoodDay ? (parsed.streak || 0) + 1 : 0;
             const fresh = defaultDayState();
             fresh.streak = newStreak;
@@ -160,23 +140,39 @@ export default function BecomingTommyShelby() {
     })();
   }, [user]);
 
+  // Load schedule from Firestore
+  useEffect(() => {
+    if (!user) return;
+    (async () => {
+      try {
+        const snap = await getDoc(doc(db, "users", user.uid, "schedule", "current"));
+        if (snap.exists()) setSchedule(snap.data());
+        else setSchedule(false);
+      } catch { setSchedule(false); }
+    })();
+  }, [user]);
+
   // Save state to Firestore + update leaderboard entry
   useEffect(() => {
     if (!loaded || !user) return;
     (async () => {
       try {
-        await setDoc(doc(db, "users", user.uid, "data", "state"), dayState);
+        const missionCount = schedule?.missions?.length || 1;
+        await setDoc(doc(db, "users", user.uid, "data", "state"), {
+          ...dayState,
+          totalMissions: missionCount,
+        });
         await setDoc(doc(db, "leaderboard", user.uid), {
           displayName: user.displayName || user.email?.split("@")[0] || "Soldier",
           streak: dayState.streak,
           score: Math.max(0, Math.min(100, Math.round(
-            (dayState.completed.length / DAILY_MISSIONS.length) * 60
+            (dayState.completed.length / missionCount) * 60
             - Object.values(dayState.ruleViolations).reduce((a, b) => a + b, 0) * 10
             - dayState.urgeCount * 2
             + Math.min(dayState.streak * 2, 20)
           ))),
           completed: dayState.completed.length,
-          total: DAILY_MISSIONS.length,
+          total: missionCount,
           updatedAt: serverTimestamp(),
         });
       } catch {}
@@ -217,15 +213,16 @@ export default function BecomingTommyShelby() {
     const h = now.getHours();
     const m = now.getMinutes();
     const nowMin = h * 60 + m;
+    const missions = schedule?.missions || [];
     let best = 0;
-    for (let i = 0; i < DAILY_MISSIONS.length; i++) {
-      const [mh, mm] = DAILY_MISSIONS[i].time.split(":").map(Number);
+    for (let i = 0; i < missions.length; i++) {
+      const [mh, mm] = missions[i].time.split(":").map(Number);
       if (nowMin >= mh * 60 + mm) best = i;
     }
     // Skip completed/failed
-    while (best < DAILY_MISSIONS.length - 1 &&
-      (dayState.completed.includes(DAILY_MISSIONS[best].id) ||
-       dayState.failed.includes(DAILY_MISSIONS[best].id))) {
+    while (best < missions.length - 1 &&
+      (dayState.completed.includes(missions[best].id) ||
+       dayState.failed.includes(missions[best].id))) {
       best++;
     }
     setCurrentMissionIdx(best);
@@ -242,7 +239,8 @@ export default function BecomingTommyShelby() {
     }
   }, [timerRunning, timerSeconds]);
 
-  const mission = DAILY_MISSIONS[currentMissionIdx];
+  const missions = schedule?.missions || [];
+  const mission = missions[currentMissionIdx];
 
   const startTimer = () => {
     if (mission.duration > 0) {
@@ -289,7 +287,7 @@ export default function BecomingTommyShelby() {
   };
 
   const shelbyScore = () => {
-    const totalMissions = DAILY_MISSIONS.length;
+    const totalMissions = missions.length || 1;
     const completedPct = (dayState.completed.length / totalMissions) * 60;
     const violations = Object.values(dayState.ruleViolations).reduce((a, b) => a + b, 0);
     const rulePenalty = violations * 10;
@@ -317,13 +315,55 @@ export default function BecomingTommyShelby() {
     }
   };
 
-  const catColor = (cat) => {
-    switch(cat) {
-      case "wake": return "#D4A03C";
-      case "work": return "#C23B22";
-      case "exercise": return "#3A8F6A";
-      case "rest": return "#5B7FA5";
-      default: return "#888";
+  const catColor = (cat) => CATEGORIES[cat]?.color || "#888";
+
+  const streakStatus = () => {
+    const total = missions.length;
+    if (total === 0) return null;
+    const pct = dayState.completed.length / total;
+    if (pct >= 0.9) return { label: "EXCELLENT", color: "#D4A03C" };
+    if (pct >= 0.7) return { label: "STREAK HELD", color: "#3A8F6A" };
+    return { label: "STREAK BROKEN", color: "#C23B22" };
+  };
+
+  const handleOnboardingComplete = async (data) => {
+    const scheduleData = {
+      templateId: data.templateId,
+      templateName: data.templateName,
+      wakeTime: data.wakeTime,
+      addOns: data.addOns,
+      missions: data.missions,
+    };
+    setSchedule(scheduleData);
+    if (user) {
+      try {
+        await setDoc(doc(db, "users", user.uid, "schedule", "current"), scheduleData);
+      } catch {}
+    }
+  };
+
+  const handleScheduleSave = async (newMissions) => {
+    const updated = { ...schedule, missions: newMissions };
+    setSchedule(updated);
+    setShowEditor(false);
+    if (user) {
+      try {
+        await setDoc(doc(db, "users", user.uid, "schedule", "current"), updated);
+      } catch {}
+    }
+  };
+
+  const handleScheduleReset = async () => {
+    const template = TEMPLATES.find(t => t.id === schedule?.templateId);
+    if (!template) return;
+    const shifted = shiftMissions(template.missions, template.defaultWakeTime, schedule.wakeTime);
+    const final = applyAddOns(shifted, schedule.addOns || [], schedule.wakeTime);
+    const updated = { ...schedule, missions: final };
+    setSchedule(updated);
+    if (user) {
+      try {
+        await setDoc(doc(db, "users", user.uid, "schedule", "current"), updated);
+      } catch {}
     }
   };
 
@@ -356,6 +396,29 @@ export default function BecomingTommyShelby() {
       <div style={styles.loadingScreen}>
         <div style={styles.loadingText}>LOADING ORDERS...</div>
       </div>
+    );
+  }
+
+  if (schedule === null) {
+    return (
+      <div style={styles.loadingScreen}>
+        <div style={styles.loadingText}>LOADING ORDERS...</div>
+      </div>
+    );
+  }
+
+  if (schedule === false) {
+    return <Onboarding onComplete={handleOnboardingComplete} />;
+  }
+
+  if (showEditor) {
+    return (
+      <ScheduleEditor
+        missions={schedule.missions}
+        onSave={handleScheduleSave}
+        onClose={() => setShowEditor(false)}
+        onReset={handleScheduleReset}
+      />
     );
   }
 
@@ -431,7 +494,7 @@ export default function BecomingTommyShelby() {
 
       <main style={styles.main}>
         {/* ====== COMMAND VIEW ====== */}
-        {view === "command" && !urgeMode && (
+        {view === "command" && !urgeMode && mission && (
           <div style={styles.commandView}>
             <div style={{ ...styles.categoryTag, background: catColor(mission.category) }}>
               {mission.category.toUpperCase()}
@@ -478,11 +541,11 @@ export default function BecomingTommyShelby() {
               <div style={styles.progressBar}>
                 <div style={{
                   ...styles.progressFill,
-                  width: `${(dayState.completed.length / DAILY_MISSIONS.length) * 100}%`,
+                  width: `${missions.length ? (dayState.completed.length / missions.length) * 100 : 0}%`,
                 }} />
               </div>
               <span style={styles.progressText}>
-                {dayState.completed.length}/{DAILY_MISSIONS.length}
+                {dayState.completed.length}/{missions.length}
               </span>
             </div>
           </div>
@@ -517,9 +580,12 @@ export default function BecomingTommyShelby() {
         {/* ====== SCHEDULE VIEW ====== */}
         {view === "schedule" && (
           <div style={styles.scheduleView}>
-            <h2 style={styles.sectionTitle}>TODAY'S ORDERS</h2>
+            <div style={styles.scheduleHeader}>
+              <h2 style={styles.sectionTitle}>TODAY'S ORDERS</h2>
+              <button style={styles.editScheduleBtn} onClick={() => setShowEditor(true)}>EDIT SCHEDULE</button>
+            </div>
             <div style={styles.scheduleList}>
-              {DAILY_MISSIONS.map((m, i) => {
+              {missions.map((m, i) => {
                 const done = dayState.completed.includes(m.id);
                 const fail = dayState.failed.includes(m.id);
                 const isCurrent = i === currentMissionIdx;
@@ -638,6 +704,12 @@ export default function BecomingTommyShelby() {
         {view === "score" && (
           <div style={styles.scoreView}>
             <h2 style={styles.sectionTitle}>SHELBY SCORE</h2>
+            {streakStatus() && (
+              <div style={{ ...styles.streakStatusBanner, background: streakStatus().color + "22", border: `1px solid ${streakStatus().color}44` }}>
+                <span style={{ ...styles.streakStatusLabel, color: streakStatus().color }}>{streakStatus().label}</span>
+                <span style={styles.streakStatusSub}>{dayState.completed.length}/{missions.length} missions · {missions.length ? Math.round((dayState.completed.length / missions.length) * 100) : 0}% complete</span>
+              </div>
+            )}
             <div style={styles.bigScore}>
               <div style={styles.bigScoreNum}>{shelbyScore()}</div>
               <div style={styles.bigScoreLabel}>/ 100</div>
@@ -645,7 +717,7 @@ export default function BecomingTommyShelby() {
             <div style={styles.scoreBreakdown}>
               <div style={styles.scoreStat}>
                 <span style={styles.scoreStatLabel}>Missions Completed</span>
-                <span style={styles.scoreStatVal}>{dayState.completed.length} / {DAILY_MISSIONS.length}</span>
+                <span style={styles.scoreStatVal}>{dayState.completed.length} / {missions.length}</span>
               </div>
               <div style={styles.scoreStat}>
                 <span style={styles.scoreStatLabel}>Missions Failed</span>
@@ -1144,6 +1216,24 @@ const styles = {
 
   // Schedule View
   scheduleView: {},
+  scheduleHeader: {
+    display: "flex",
+    justifyContent: "space-between",
+    alignItems: "center",
+    marginBottom: "0",
+  },
+  editScheduleBtn: {
+    padding: "6px 14px",
+    background: "transparent",
+    border: "1px solid #2A2A2A",
+    borderRadius: "4px",
+    color: "#D4A03C",
+    fontFamily: "'Bebas Neue', sans-serif",
+    fontSize: "12px",
+    letterSpacing: "2px",
+    cursor: "pointer",
+    marginBottom: "16px",
+  },
   sectionTitle: {
     fontFamily: "'Bebas Neue', sans-serif",
     fontSize: "28px",
@@ -1336,6 +1426,25 @@ const styles = {
     flexDirection: "column",
     alignItems: "center",
     gap: "24px",
+  },
+  streakStatusBanner: {
+    width: "100%",
+    borderRadius: "6px",
+    padding: "14px 18px",
+    display: "flex",
+    flexDirection: "column",
+    alignItems: "center",
+    gap: "4px",
+  },
+  streakStatusLabel: {
+    fontFamily: "'Bebas Neue', sans-serif",
+    fontSize: "22px",
+    letterSpacing: "4px",
+  },
+  streakStatusSub: {
+    fontFamily: "'JetBrains Mono', monospace",
+    fontSize: "10px",
+    color: "#666",
   },
   bigScore: {
     display: "flex",
