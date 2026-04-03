@@ -31,9 +31,10 @@ const RULES = [
   { id: "masturbation", label: "Max 1 release per day", maxViolations: 1 },
 ];
 
-const todayKey = () => new Date().toISOString().slice(0, 10);
-const tomorrowKey = () => { const d = new Date(); d.setDate(d.getDate() + 1); return d.toISOString().slice(0, 10); };
-const offsetDay = (base, n) => { const d = new Date(base + "T00:00:00"); d.setDate(d.getDate() + n); return d.toISOString().slice(0, 10); };
+const localStr = (d) => `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
+const todayKey = () => localStr(new Date());
+const tomorrowKey = () => { const d = new Date(); d.setDate(d.getDate() + 1); return localStr(d); };
+const offsetDay = (base, n) => { const [y, m, day] = base.split("-").map(Number); return localStr(new Date(y, m - 1, day + n)); };
 const prevMonth = (ym) => { const [y, m] = ym.split("-").map(Number); return m === 1 ? `${y - 1}-12` : `${y}-${String(m - 1).padStart(2, "0")}`; };
 const nextMonth = (ym) => { const [y, m] = ym.split("-").map(Number); return m === 12 ? `${y + 1}-01` : `${y}-${String(m + 1).padStart(2, "0")}`; };
 const buildCalendar = (ym) => {
@@ -332,18 +333,13 @@ export default function BecomingTommyShelby() {
   const mission = missions[currentMissionIdx];
 
   const completeMission = () => {
-    setDayState(s => ({
-      ...s,
-      completed: [...s.completed, mission.id],
-      streak: s.streak,
-    }));
+    if (!mission || dayState.completed.includes(mission.id) || dayState.failed.includes(mission.id)) return;
+    setDayState(s => ({ ...s, completed: [...s.completed, mission.id] }));
   };
 
   const failMission = () => {
-    setDayState(s => ({
-      ...s,
-      failed: [...s.failed, mission.id],
-    }));
+    if (!mission || dayState.completed.includes(mission.id) || dayState.failed.includes(mission.id)) return;
+    setDayState(s => ({ ...s, failed: [...s.failed, mission.id] }));
   };
 
   const reportViolation = (ruleId) => {
@@ -623,12 +619,27 @@ export default function BecomingTommyShelby() {
             })()}
 
             <div style={styles.actionRow}>
-              <button style={styles.completeBtn} onClick={completeMission}>
-                ✓ COMPLETE
-              </button>
-              <button style={styles.failBtn} onClick={failMission}>
-                ✗ FAILED
-              </button>
+              {(() => {
+                const done = dayState.completed.includes(mission?.id);
+                const failed = dayState.failed.includes(mission?.id);
+                const locked = done || failed;
+                return (
+                  <>
+                    <button
+                      style={{ ...styles.completeBtn, opacity: locked ? 0.35 : 1, cursor: locked ? "default" : "pointer" }}
+                      onClick={completeMission}
+                    >
+                      {done ? "✓ DONE" : "✓ COMPLETE"}
+                    </button>
+                    <button
+                      style={{ ...styles.failBtn, opacity: locked ? 0.35 : 1, cursor: locked ? "default" : "pointer" }}
+                      onClick={failMission}
+                    >
+                      {failed ? "✗ FAILED" : "✗ FAIL"}
+                    </button>
+                  </>
+                );
+              })()}
             </div>
 
             <button style={styles.urgeBtn} onClick={handleUrge}>
