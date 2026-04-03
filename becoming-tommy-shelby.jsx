@@ -1,11 +1,11 @@
-import { useState, useEffect, useCallback, useRef } from "react";
+import { useState, useEffect, useRef } from "react";
 import { onAuthStateChanged, signOut, updateProfile } from "firebase/auth";
 import { doc, getDoc, setDoc, collection, getDocs, serverTimestamp } from "firebase/firestore";
 import { auth, db } from "./firebase";
 import AuthScreen from "./AuthScreen";
 import Onboarding from "./Onboarding";
 import ScheduleEditor from "./ScheduleEditor";
-import { CATEGORIES, TEMPLATES, shiftMissions, applyAddOns } from "./templates";
+import { CATEGORIES, TEMPLATES, shiftWeekly, applyAddOnsToWeekly } from "./templates";
 
 const DEBRIEF_QUESTIONS = [
   "Did you execute all three priorities today?",
@@ -34,6 +34,17 @@ const RULES = [
 const todayKey = () => new Date().toISOString().slice(0, 10);
 const tomorrowKey = () => { const d = new Date(); d.setDate(d.getDate() + 1); return d.toISOString().slice(0, 10); };
 const offsetDay = (base, n) => { const d = new Date(base + "T00:00:00"); d.setDate(d.getDate() + n); return d.toISOString().slice(0, 10); };
+const prevMonth = (ym) => { const [y, m] = ym.split("-").map(Number); return m === 1 ? `${y - 1}-12` : `${y}-${String(m - 1).padStart(2, "0")}`; };
+const nextMonth = (ym) => { const [y, m] = ym.split("-").map(Number); return m === 12 ? `${y + 1}-01` : `${y}-${String(m + 1).padStart(2, "0")}`; };
+const buildCalendar = (ym) => {
+  const [y, m] = ym.split("-").map(Number);
+  const firstDow = new Date(y, m - 1, 1).getDay();
+  const days = new Date(y, m, 0).getDate();
+  const cells = [];
+  for (let i = 0; i < firstDow; i++) cells.push(null);
+  for (let d = 1; d <= days; d++) cells.push(`${ym}-${String(d).padStart(2, "0")}`);
+  return cells;
+};
 const formatNoteDate = (key) => {
   const today = todayKey();
   const tomorrow = tomorrowKey();
@@ -60,8 +71,6 @@ export default function BecomingTommyShelby() {
   const [dayState, setDayState] = useState(defaultDayState());
   const [globalStreak, setGlobalStreak] = useState(0);
   const [currentMissionIdx, setCurrentMissionIdx] = useState(0);
-  const [timerSeconds, setTimerSeconds] = useState(0);
-  const [timerRunning, setTimerRunning] = useState(false);
   const [urgeMode, setUrgeMode] = useState(false);
   const [urgeStep, setUrgeStep] = useState(0);
   const [ruleWarning, setRuleWarning] = useState(null);
@@ -69,7 +78,7 @@ export default function BecomingTommyShelby() {
   const [debriefInput, setDebriefInput] = useState("");
   const [loaded, setLoaded] = useState(false);
   const [now, setNow] = useState(new Date());
-  const timerRef = useRef(null);
+  const lastFiveMinWarnRef = useRef(new Set());
   const [user, setUser] = useState(null);
   const [authLoading, setAuthLoading] = useState(true);
   const [newDisplayName, setNewDisplayName] = useState("");
@@ -87,6 +96,11 @@ export default function BecomingTommyShelby() {
   const [notesOriginal, setNotesOriginal] = useState("");
   const [notesLoading, setNotesLoading] = useState(false);
   const [notesSavedMsg, setNotesSavedMsg] = useState("");
+  const [notesCalMonth, setNotesCalMonth] = useState(todayKey().slice(0, 7));
+  const [notesHasDates, setNotesHasDates] = useState(new Set());
+  const [notesCalView, setNotesCalView] = useState(false);
+  const [scheduleViewDay, setScheduleViewDay] = useState(null); // null = today
+  const [notifBannerDismissed, setNotifBannerDismissed] = useState(false);
 
   // Clock
   useEffect(() => {
@@ -94,21 +108,32 @@ export default function BecomingTommyShelby() {
     return () => clearInterval(t);
   }, []);
 
-  // Mission alarm — fires a notification at the start of each mission
+  // Mission alarm — fires at mission start + 5-min warning before end
   useEffect(() => {
     if (!loaded || !user) return;
     if (typeof Notification === "undefined" || Notification.permission !== "granted") return;
-    const h = now.getHours();
-    const m = now.getMinutes();
-    const nowMin = h * 60 + m;
-    if (nowMin === lastNotifMinRef.current) return;
-    const hit = (schedule?.missions || []).find(ms => {
-      const [mh, mm] = ms.time.split(":").map(Number);
-      return mh * 60 + mm === nowMin;
-    });
-    if (hit) {
+    const DAY_NAMES_NOTIF = ["sunday","monday","tuesday","wednesday","thursday","friday","saturday"];
+    const todayMs = DAY_NAMES_NOTIF[now.getDay()];
+    const todayMissions = schedule?.weekly?.[todayMs] || [];
+    const nowMin = now.getHours() * 60 + now.getMinutes();
+    if (nowMin !== lastNotifMinRef.current) {
       lastNotifMinRef.current = nowMin;
-      new Notification(`⏱ ${hit.label}`, { body: hit.command, icon: "/favicon.ico" });
+      const startHit = todayMissions.find(ms => {
+        const [mh, mm] = ms.time.split(":").map(Number);
+        return mh * 60 + mm === nowMin;
+      });
+      if (startHit) {
+        new Notification(`⏱ ${startHit.label}`, { body: startHit.command, icon: "/favicon.ico" });
+      }
+      const fiveMin = todayMissions.find(ms => {
+        if (ms.duration <= 0) return false;
+        const [mh, mm] = ms.time.split(":").map(Number);
+        return mh * 60 + mm + ms.duration === nowMin + 5;
+      });
+      if (fiveMin && !lastFiveMinWarnRef.current.has(fiveMin.id)) {
+        lastFiveMinWarnRef.current.add(fiveMin.id);
+        new Notification(`⏰ 5 MIN LEFT: ${fiveMin.label}`, { body: "Finish strong.", icon: "/favicon.ico" });
+      }
     }
   }, [now, loaded, user]);
 
@@ -161,9 +186,21 @@ export default function BecomingTommyShelby() {
     if (!user) return;
     (async () => {
       try {
-        const snap = await getDoc(doc(db, "users", user.uid, "schedule", "current"));
-        if (snap.exists()) setSchedule(snap.data());
-        else setSchedule(false);
+        let snap = await getDoc(doc(db, "users", user.uid, "schedule", "weekly"));
+        if (snap.exists()) {
+          setSchedule(snap.data());
+        } else {
+          // Try old single-day format and migrate
+          snap = await getDoc(doc(db, "users", user.uid, "schedule", "current"));
+          if (snap.exists()) {
+            const old = snap.data();
+            if (old.missions) {
+              const allDays = ["monday","tuesday","wednesday","thursday","friday","saturday","sunday"];
+              const w = Object.fromEntries(allDays.map(d => [d, old.missions]));
+              setSchedule({ ...old, weekly: w });
+            } else { setSchedule(false); }
+          } else { setSchedule(false); }
+        }
       } catch { setSchedule(false); }
     })();
   }, [user]);
@@ -173,7 +210,8 @@ export default function BecomingTommyShelby() {
     if (!loaded || !user) return;
     (async () => {
       try {
-        const missionCount = schedule?.missions?.length || 1;
+        const DAY_NAMES_SAVE = ["sunday","monday","tuesday","wednesday","thursday","friday","saturday"];
+        const missionCount = schedule?.weekly?.[DAY_NAMES_SAVE[new Date().getDay()]]?.length || 1;
         await setDoc(doc(db, "users", user.uid, "data", "state"), {
           ...dayState,
           totalMissions: missionCount,
@@ -208,6 +246,18 @@ export default function BecomingTommyShelby() {
       .catch(() => {})
       .finally(() => setLeaderboardLoading(false));
   }, [view === "leaderboard" ? view : null, user]);
+
+  // Fetch which dates in the calendar month have notes
+  useEffect(() => {
+    if (!user) return;
+    (async () => {
+      try {
+        const snap = await getDocs(collection(db, "users", user.uid, "notes"));
+        const dates = new Set(snap.docs.map(d => d.id).filter(id => id.startsWith(notesCalMonth)));
+        setNotesHasDates(dates);
+      } catch {}
+    })();
+  }, [user, notesCalMonth]);
 
   // Load note for the currently viewed date
   useEffect(() => {
@@ -260,7 +310,8 @@ export default function BecomingTommyShelby() {
     const h = now.getHours();
     const m = now.getMinutes();
     const nowMin = h * 60 + m;
-    const missions = schedule?.missions || [];
+    const dayNames = ["sunday","monday","tuesday","wednesday","thursday","friday","saturday"];
+    const missions = schedule?.weekly?.[dayNames[now.getDay()]] || [];
     let best = 0;
     for (let i = 0; i < missions.length; i++) {
       const [mh, mm] = missions[i].time.split(":").map(Number);
@@ -275,29 +326,12 @@ export default function BecomingTommyShelby() {
     setCurrentMissionIdx(best);
   }, [now, dayState.completed, dayState.failed]);
 
-  // Timer
-  useEffect(() => {
-    if (timerRunning && timerSeconds > 0) {
-      timerRef.current = setTimeout(() => setTimerSeconds(s => s - 1), 1000);
-      return () => clearTimeout(timerRef.current);
-    }
-    if (timerRunning && timerSeconds === 0) {
-      setTimerRunning(false);
-    }
-  }, [timerRunning, timerSeconds]);
-
-  const missions = schedule?.missions || [];
+  const DAY_NAMES = ["sunday","monday","tuesday","wednesday","thursday","friday","saturday"];
+  const todayDayName = DAY_NAMES[now.getDay()];
+  const missions = schedule?.weekly?.[todayDayName] || [];
   const mission = missions[currentMissionIdx];
 
-  const startTimer = () => {
-    if (mission.duration > 0) {
-      setTimerSeconds(mission.duration * 60);
-      setTimerRunning(true);
-    }
-  };
-
   const completeMission = () => {
-    setTimerRunning(false);
     setDayState(s => ({
       ...s,
       completed: [...s.completed, mission.id],
@@ -306,7 +340,6 @@ export default function BecomingTommyShelby() {
   };
 
   const failMission = () => {
-    setTimerRunning(false);
     setDayState(s => ({
       ...s,
       failed: [...s.failed, mission.id],
@@ -379,23 +412,23 @@ export default function BecomingTommyShelby() {
       templateName: data.templateName,
       wakeTime: data.wakeTime,
       addOns: data.addOns,
-      missions: data.missions,
+      weekly: data.weekly,
     };
     setSchedule(scheduleData);
     if (user) {
       try {
-        await setDoc(doc(db, "users", user.uid, "schedule", "current"), scheduleData);
+        await setDoc(doc(db, "users", user.uid, "schedule", "weekly"), scheduleData);
       } catch {}
     }
   };
 
-  const handleScheduleSave = async (newMissions) => {
-    const updated = { ...schedule, missions: newMissions };
+  const handleScheduleSave = async (newWeekly) => {
+    const updated = { ...schedule, weekly: newWeekly };
     setSchedule(updated);
     setShowEditor(false);
     if (user) {
       try {
-        await setDoc(doc(db, "users", user.uid, "schedule", "current"), updated);
+        await setDoc(doc(db, "users", user.uid, "schedule", "weekly"), updated);
       } catch {}
     }
   };
@@ -403,13 +436,13 @@ export default function BecomingTommyShelby() {
   const handleScheduleReset = async () => {
     const template = TEMPLATES.find(t => t.id === schedule?.templateId);
     if (!template) return;
-    const shifted = shiftMissions(template.missions, template.defaultWakeTime, schedule.wakeTime);
-    const final = applyAddOns(shifted, schedule.addOns || [], schedule.wakeTime);
-    const updated = { ...schedule, missions: final };
+    const shiftedWeekly = shiftWeekly(template.weekly, template.defaultWakeTime, schedule.wakeTime);
+    const finalWeekly = applyAddOnsToWeekly(shiftedWeekly, schedule.addOns || [], schedule.wakeTime);
+    const updated = { ...schedule, weekly: finalWeekly };
     setSchedule(updated);
     if (user) {
       try {
-        await setDoc(doc(db, "users", user.uid, "schedule", "current"), updated);
+        await setDoc(doc(db, "users", user.uid, "schedule", "weekly"), updated);
       } catch {}
     }
   };
@@ -461,7 +494,7 @@ export default function BecomingTommyShelby() {
   if (showEditor) {
     return (
       <ScheduleEditor
-        missions={schedule.missions}
+        weekly={schedule.weekly}
         onSave={handleScheduleSave}
         onClose={() => setShowEditor(false)}
         onReset={handleScheduleReset}
@@ -472,6 +505,21 @@ export default function BecomingTommyShelby() {
   return (
     <div style={styles.container}>
       <link href="https://fonts.googleapis.com/css2?family=Bebas+Neue&family=JetBrains+Mono:wght@400;700&family=Inter:wght@400;600;700&display=swap" rel="stylesheet" />
+
+      {/* Notification permission banner */}
+      {notifPermission !== "granted" && !notifBannerDismissed && (
+        <div style={{ background: "#111", borderBottom: "1px solid #222", padding: "8px 16px", display: "flex", alignItems: "center", gap: "10px", flexWrap: "wrap" }}>
+          <span style={{ fontFamily: "'JetBrains Mono', monospace", fontSize: "10px", color: "#555", flex: 1 }}>
+            Keep this tab open to receive mission alerts.
+          </span>
+          {notifPermission !== "denied" && (
+            <button onClick={enableNotifications} style={{ padding: "4px 12px", background: "#D4A03C", border: "none", borderRadius: "3px", color: "#0A0A0A", fontFamily: "'Bebas Neue', sans-serif", fontSize: "11px", letterSpacing: "2px", cursor: "pointer" }}>
+              ENABLE ALERTS
+            </button>
+          )}
+          <button onClick={() => setNotifBannerDismissed(true)} style={{ background: "none", border: "none", color: "#333", cursor: "pointer", fontSize: "16px", lineHeight: 1 }}>✕</button>
+        </div>
+      )}
 
       {/* Rule Warning Overlay */}
       {ruleWarning && (
@@ -491,6 +539,8 @@ export default function BecomingTommyShelby() {
               {now.toLocaleDateString("en-US", { weekday: "long", month: "short", day: "numeric" }).toUpperCase()}
               {" · "}
               {now.toLocaleTimeString("en-US", { hour: "2-digit", minute: "2-digit", hour12: false })}
+              {" · "}
+              {(schedule?.templateName || "").toUpperCase()}
             </div>
           </div>
         </div>
@@ -551,25 +601,26 @@ export default function BecomingTommyShelby() {
             <h1 style={styles.commandTitle}>{mission.label}</h1>
             <p style={styles.commandText}>{mission.command}</p>
 
-            {mission.duration > 0 && (
-              <div style={styles.timerBlock}>
-                <div style={styles.timerDisplay}>
-                  {timerRunning ? formatTime(timerSeconds) : `${mission.duration}:00`}
-                </div>
-                {!timerRunning && timerSeconds === 0 && (
-                  <button style={styles.startBtn} onClick={startTimer}>START TIMER</button>
-                )}
-                {timerRunning && (
+            {mission.duration > 0 && (() => {
+              const [mh, mm] = mission.time.split(":").map(Number);
+              const endMin = mh * 60 + mm + mission.duration;
+              const nowMin = now.getHours() * 60 + now.getMinutes() + now.getSeconds() / 60;
+              const remainSec = Math.max(0, Math.round((endMin - nowMin) * 60));
+              const pct = Math.max(0, Math.min(100, (remainSec / (mission.duration * 60)) * 100));
+              return (
+                <div style={styles.timerBlock}>
+                  <div style={styles.timerDisplay}>{formatTime(remainSec)}</div>
                   <div style={styles.timerBar}>
-                    <div style={{
-                      ...styles.timerFill,
-                      width: `${(timerSeconds / (mission.duration * 60)) * 100}%`,
-                    }} />
+                    <div style={{ ...styles.timerFill, width: `${pct}%` }} />
                   </div>
-                )}
-                {!timerRunning && timerSeconds === 0 && mission.duration > 0 && null}
-              </div>
-            )}
+                  {remainSec === 0 && (
+                    <div style={{ fontFamily: "'JetBrains Mono', monospace", fontSize: "11px", color: "#C23B22", letterSpacing: "2px" }}>
+                      TIME'S UP
+                    </div>
+                  )}
+                </div>
+              );
+            })()}
 
             <div style={styles.actionRow}>
               <button style={styles.completeBtn} onClick={completeMission}>
@@ -626,46 +677,75 @@ export default function BecomingTommyShelby() {
         )}
 
         {/* ====== SCHEDULE VIEW ====== */}
-        {view === "schedule" && (
-          <div style={styles.scheduleView}>
-            <div style={styles.scheduleHeader}>
-              <h2 style={styles.sectionTitle}>TODAY'S ORDERS</h2>
-              <button style={styles.editScheduleBtn} onClick={() => setShowEditor(true)}>EDIT SCHEDULE</button>
-            </div>
-            <div style={styles.scheduleList}>
-              {missions.map((m, i) => {
-                const done = dayState.completed.includes(m.id);
-                const fail = dayState.failed.includes(m.id);
-                const isCurrent = i === currentMissionIdx;
-                return (
-                  <div
-                    key={m.id}
+        {view === "schedule" && (() => {
+          const allDays = ["monday","tuesday","wednesday","thursday","friday","saturday","sunday"];
+          const dayLabels = { monday:"MON", tuesday:"TUE", wednesday:"WED", thursday:"THU", friday:"FRI", saturday:"SAT", sunday:"SUN" };
+          const displayDay = scheduleViewDay || todayDayName;
+          const displayMissions = schedule?.weekly?.[displayDay] || [];
+          const isToday = displayDay === todayDayName;
+          return (
+            <div style={styles.scheduleView}>
+              <div style={styles.scheduleHeader}>
+                <h2 style={styles.sectionTitle}>{isToday ? "TODAY'S ORDERS" : `${displayDay.toUpperCase()}'S ORDERS`}</h2>
+                <button style={styles.editScheduleBtn} onClick={() => setShowEditor(true)}>EDIT SCHEDULE</button>
+              </div>
+              {/* Day tabs */}
+              <div style={{ display: "flex", gap: "4px", marginBottom: "12px", overflowX: "auto" }}>
+                {allDays.map(d => (
+                  <button
+                    key={d}
+                    onClick={() => setScheduleViewDay(d === todayDayName ? null : d)}
                     style={{
-                      ...styles.scheduleItem,
-                      ...(isCurrent ? styles.scheduleItemCurrent : {}),
-                      ...(done ? styles.scheduleItemDone : {}),
-                      ...(fail ? styles.scheduleItemFail : {}),
+                      padding: "5px 10px",
+                      background: "none",
+                      border: "none",
+                      borderBottom: `2px solid ${displayDay === d ? "#D4A03C" : "transparent"}`,
+                      color: displayDay === d ? "#D4A03C" : d === todayDayName ? "#888" : "#444",
+                      fontFamily: "'Bebas Neue', sans-serif",
+                      fontSize: "13px",
+                      letterSpacing: "1px",
+                      cursor: "pointer",
                     }}
-                    onClick={() => { setCurrentMissionIdx(i); setView("command"); }}
                   >
-                    <div style={styles.scheduleTime}>{m.time}</div>
-                    <div style={styles.scheduleInfo}>
-                      <div style={styles.scheduleLabel}>{m.label}</div>
-                      <div style={styles.scheduleDur}>{m.duration > 0 ? `${m.duration} min` : ""}</div>
+                    {dayLabels[d]}{d === todayDayName ? " ●" : ""}
+                  </button>
+                ))}
+              </div>
+              <div style={styles.scheduleList}>
+                {displayMissions.map((m, i) => {
+                  const done = isToday && dayState.completed.includes(m.id);
+                  const fail = isToday && dayState.failed.includes(m.id);
+                  const isCurrent = isToday && i === currentMissionIdx;
+                  return (
+                    <div
+                      key={m.id}
+                      style={{
+                        ...styles.scheduleItem,
+                        ...(isCurrent ? styles.scheduleItemCurrent : {}),
+                        ...(done ? styles.scheduleItemDone : {}),
+                        ...(fail ? styles.scheduleItemFail : {}),
+                      }}
+                      onClick={() => { if (isToday) { setCurrentMissionIdx(i); setView("command"); } }}
+                    >
+                      <div style={styles.scheduleTime}>{m.time}</div>
+                      <div style={styles.scheduleInfo}>
+                        <div style={styles.scheduleLabel}>{m.label}</div>
+                        <div style={styles.scheduleDur}>{m.duration > 0 ? `${m.duration} min` : ""}</div>
+                      </div>
+                      <div style={{
+                        ...styles.scheduleDot,
+                        background: done ? "#3A8F6A" : fail ? "#C23B22" : catColor(m.category),
+                        opacity: done || fail ? 1 : 0.4,
+                      }}>
+                        {done ? "✓" : fail ? "✗" : ""}
+                      </div>
                     </div>
-                    <div style={{
-                      ...styles.scheduleDot,
-                      background: done ? "#3A8F6A" : fail ? "#C23B22" : catColor(m.category),
-                      opacity: done || fail ? 1 : 0.4,
-                    }}>
-                      {done ? "✓" : fail ? "✗" : ""}
-                    </div>
-                  </div>
-                );
-              })}
+                  );
+                })}
+              </div>
             </div>
-          </div>
-        )}
+          );
+        })()}
 
         {/* ====== RULES VIEW ====== */}
         {view === "rules" && (
@@ -800,75 +880,149 @@ export default function BecomingTommyShelby() {
           </div>
         )}
         {/* ====== NOTES VIEW ====== */}
-        {view === "notes" && (() => {
-          const today = todayKey();
-          const tomorrow = tomorrowKey();
-          const isEditable = notesDate === today || notesDate === tomorrow;
-          const isFuture = notesDate > tomorrow;
-          const { label: dateLabel, tag } = formatNoteDate(notesDate);
-          const isDirty = notesContent !== notesOriginal;
-          return (
-            <div style={ns.container}>
-              {/* Date navigation */}
-              <div style={ns.nav}>
-                <button style={ns.navArrow} onClick={() => setNotesDate(d => offsetDay(d, -1))}>‹</button>
-                <div style={ns.dateBlock}>
-                  {tag && <div style={{ ...ns.dateTag, color: tag === "TODAY" ? "#D4A03C" : "#5B9BD5" }}>{tag}</div>}
-                  <div style={ns.dateLabel}>{dateLabel}</div>
-                </div>
-                <button
-                  style={{ ...ns.navArrow, opacity: notesDate >= tomorrow ? 0.2 : 1 }}
-                  onClick={() => setNotesDate(d => offsetDay(d, 1))}
-                  disabled={notesDate >= tomorrow}
-                >›</button>
-              </div>
-
-              {notesDate !== today && (
-                <button style={ns.todayBtn} onClick={() => setNotesDate(today)}>JUMP TO TODAY</button>
-              )}
-
-              {/* Note area */}
-              {notesLoading ? (
-                <div style={ns.loading}>loading...</div>
-              ) : isFuture ? (
-                <div style={ns.blocked}>
-                  <div style={ns.blockedIcon}>—</div>
-                  <div style={ns.blockedText}>You can only write notes for today and tomorrow.</div>
-                </div>
-              ) : isEditable ? (
-                <div style={ns.editorWrap}>
-                  <textarea
-                    style={ns.textarea}
-                    value={notesContent}
-                    onChange={e => setNotesContent(e.target.value)}
-                    placeholder={notesDate === tomorrow
-                      ? "Plan tomorrow. What must get done? What will you do differently?"
-                      : "Capture today. What happened? What do you need to remember?"}
-                    spellCheck={false}
-                  />
-                  <div style={ns.saveRow}>
-                    {notesSavedMsg
-                      ? <span style={ns.savedMsg}>{notesSavedMsg}</span>
-                      : <span style={ns.charCount}>{notesContent.length} chars</span>
-                    }
-                    <button
-                      style={{ ...ns.saveBtn, opacity: isDirty ? 1 : 0.35, cursor: isDirty ? "pointer" : "default" }}
-                      onClick={saveNote}
-                      disabled={!isDirty}
-                    >SAVE</button>
+        {view === "notes" && (
+          <div style={ns.container}>
+            {notesCalView ? (
+              /* ── CALENDAR VIEW ── */
+              <div>
+                <div style={ns.calTopRow}>
+                  <button style={ns.calMonthArrow} onClick={() => {
+                    const pm = prevMonth(notesCalMonth);
+                    setNotesCalMonth(pm);
+                    (async () => {
+                      try {
+                        const snap = await getDocs(collection(db, "users", user.uid, "notes"));
+                        setNotesHasDates(new Set(snap.docs.map(d => d.id).filter(id => id.startsWith(pm))));
+                      } catch {}
+                    })();
+                  }}>‹</button>
+                  <div style={ns.calMonthLabel}>
+                    {new Date(notesCalMonth + "-01T00:00:00").toLocaleDateString("en-US", { month: "long", year: "numeric" }).toUpperCase()}
                   </div>
+                  <button style={ns.calMonthArrow} onClick={() => {
+                    const nm = nextMonth(notesCalMonth);
+                    setNotesCalMonth(nm);
+                    (async () => {
+                      try {
+                        const snap = await getDocs(collection(db, "users", user.uid, "notes"));
+                        setNotesHasDates(new Set(snap.docs.map(d => d.id).filter(id => id.startsWith(nm))));
+                      } catch {}
+                    })();
+                  }}>›</button>
                 </div>
-              ) : (
-                <div style={ns.readWrap}>
-                  {notesContent
-                    ? <pre style={ns.readText}>{notesContent}</pre>
-                    : <div style={ns.emptyPast}>No notes for this day.</div>
-                  }
+                <div style={ns.calDow}>
+                  {["SUN","MON","TUE","WED","THU","FRI","SAT"].map(d => (
+                    <div key={d} style={ns.calDowCell}>{d}</div>
+                  ))}
                 </div>
-              )}
-            </div>
-          );
-        })()}
+                <div style={ns.calGrid}>
+                  {buildCalendar(notesCalMonth).map((dateKey, i) => {
+                    if (!dateKey) return <div key={i} />;
+                    const today = todayKey();
+                    const tomorrow = tomorrowKey();
+                    const isToday = dateKey === today;
+                    const isTomorrow = dateKey === tomorrow;
+                    const isFut = dateKey > tomorrow;
+                    const hasNote = notesHasDates.has(dateKey);
+                    return (
+                      <button
+                        key={dateKey}
+                        style={{
+                          ...ns.calCell,
+                          ...(isToday ? ns.calCellToday : {}),
+                          ...(isTomorrow ? ns.calCellTomorrow : {}),
+                          ...(isFut ? ns.calCellFuture : {}),
+                          ...(notesDate === dateKey ? ns.calCellSelected : {}),
+                        }}
+                        onClick={() => {
+                          setNotesDate(dateKey);
+                          setNotesCalView(false);
+                        }}
+                      >
+                        <span>{new Date(dateKey + "T00:00:00").getDate()}</span>
+                        {hasNote && <div style={ns.calDot} />}
+                      </button>
+                    );
+                  })}
+                </div>
+                <button style={ns.closeCal} onClick={() => setNotesCalView(false)}>BACK TO NOTE</button>
+              </div>
+            ) : (
+              /* ── NOTE VIEW ── */
+              (() => {
+                const today = todayKey();
+                const tomorrow = tomorrowKey();
+                const isEditable = notesDate === today || notesDate === tomorrow;
+                const isFuture = notesDate > tomorrow;
+                const { label: dateLabel, tag } = formatNoteDate(notesDate);
+                const isDirty = notesContent !== notesOriginal;
+                return (
+                  <>
+                    {/* Date navigation row */}
+                    <div style={ns.nav}>
+                      <button style={ns.navArrow} onClick={() => setNotesDate(offsetDay(notesDate, -1))}>‹</button>
+                      <button style={ns.dateBlock} onClick={() => {
+                        setNotesCalMonth(notesDate.slice(0, 7));
+                        setNotesCalView(true);
+                      }}>
+                        {tag && <div style={{ ...ns.dateTag, color: tag === "TODAY" ? "#D4A03C" : "#5B9BD5" }}>{tag}</div>}
+                        <div style={ns.dateLabel}>{dateLabel}</div>
+                        <div style={ns.calHint}>view calendar</div>
+                      </button>
+                      <button
+                        style={{ ...ns.navArrow, opacity: notesDate > today ? 0.2 : 1, cursor: notesDate > today ? "default" : "pointer" }}
+                        onClick={() => { if (notesDate <= today) setNotesDate(offsetDay(notesDate, 1)); }}
+                      >›</button>
+                    </div>
+
+                    {notesDate !== today && (
+                      <button style={ns.todayBtn} onClick={() => setNotesDate(today)}>JUMP TO TODAY</button>
+                    )}
+
+                    {notesLoading ? (
+                      <div style={ns.loading}>loading...</div>
+                    ) : isFuture ? (
+                      <div style={ns.blocked}>
+                        <div style={ns.blockedIcon}>—</div>
+                        <div style={ns.blockedText}>You can only write notes for today and tomorrow.</div>
+                      </div>
+                    ) : isEditable ? (
+                      <div style={ns.editorWrap}>
+                        <textarea
+                          style={ns.textarea}
+                          value={notesContent}
+                          onChange={e => setNotesContent(e.target.value)}
+                          placeholder={notesDate === tomorrow
+                            ? "Plan tomorrow. What must get done? What will you do differently?"
+                            : "Capture today. What happened? What do you need to remember?"}
+                          spellCheck={false}
+                        />
+                        <div style={ns.saveRow}>
+                          {notesSavedMsg
+                            ? <span style={ns.savedMsg}>{notesSavedMsg}</span>
+                            : <span style={ns.charCount}>{notesContent.length} chars</span>
+                          }
+                          <button
+                            style={{ ...ns.saveBtn, opacity: isDirty ? 1 : 0.35, cursor: isDirty ? "pointer" : "default" }}
+                            onClick={saveNote}
+                            disabled={!isDirty}
+                          >SAVE</button>
+                        </div>
+                      </div>
+                    ) : (
+                      <div style={ns.readWrap}>
+                        {notesContent
+                          ? <pre style={ns.readText}>{notesContent}</pre>
+                          : <div style={ns.emptyPast}>No notes for this day.</div>
+                        }
+                      </div>
+                    )}
+                  </>
+                );
+              })()
+            )}
+          </div>
+        )}
 
         {/* ====== LEADERBOARD VIEW ====== */}
         {view === "leaderboard" && (
@@ -1894,13 +2048,14 @@ const ns = {
   container: {
     display: "flex",
     flexDirection: "column",
-    gap: "0",
     maxWidth: "620px",
     margin: "0 auto",
     width: "100%",
     padding: "24px 20px 40px",
     minHeight: "100%",
   },
+
+  // ── note view ──
   nav: {
     display: "flex",
     alignItems: "center",
@@ -1914,9 +2069,8 @@ const ns = {
     fontSize: "28px",
     lineHeight: 1,
     cursor: "pointer",
-    padding: "4px 10px",
+    padding: "4px 12px",
     fontFamily: "'Inter', sans-serif",
-    transition: "color 0.15s",
   },
   dateBlock: {
     display: "flex",
@@ -1924,6 +2078,10 @@ const ns = {
     alignItems: "center",
     gap: "3px",
     flex: 1,
+    background: "none",
+    border: "none",
+    cursor: "pointer",
+    padding: "4px 0",
   },
   dateTag: {
     fontFamily: "'Bebas Neue', sans-serif",
@@ -1938,14 +2096,21 @@ const ns = {
     letterSpacing: "0.5px",
     textAlign: "center",
   },
+  calHint: {
+    fontFamily: "'JetBrains Mono', monospace",
+    fontSize: "9px",
+    color: "#2A2A2A",
+    marginTop: "2px",
+    letterSpacing: "0.5px",
+  },
   todayBtn: {
     alignSelf: "center",
     background: "none",
-    border: "1px solid #222",
+    border: "1px solid #1E1E1E",
     borderRadius: "4px",
-    color: "#444",
+    color: "#3A3A3A",
     fontFamily: "'Bebas Neue', sans-serif",
-    fontSize: "11px",
+    fontSize: "10px",
     letterSpacing: "2px",
     padding: "5px 12px",
     cursor: "pointer",
@@ -1965,11 +2130,7 @@ const ns = {
     gap: "12px",
     marginTop: "60px",
   },
-  blockedIcon: {
-    fontFamily: "'JetBrains Mono', monospace",
-    fontSize: "32px",
-    color: "#2A2A2A",
-  },
+  blockedIcon: { fontFamily: "'JetBrains Mono', monospace", fontSize: "32px", color: "#2A2A2A" },
   blockedText: {
     fontFamily: "'JetBrains Mono', monospace",
     fontSize: "11px",
@@ -1977,12 +2138,7 @@ const ns = {
     textAlign: "center",
     lineHeight: 1.6,
   },
-  editorWrap: {
-    display: "flex",
-    flexDirection: "column",
-    flex: 1,
-    gap: "12px",
-  },
+  editorWrap: { display: "flex", flexDirection: "column", flex: 1, gap: "12px" },
   textarea: {
     flex: 1,
     minHeight: "360px",
@@ -1996,23 +2152,10 @@ const ns = {
     padding: "20px",
     outline: "none",
     resize: "none",
-    letterSpacing: "0.1px",
   },
-  saveRow: {
-    display: "flex",
-    alignItems: "center",
-    justifyContent: "space-between",
-  },
-  charCount: {
-    fontFamily: "'JetBrains Mono', monospace",
-    fontSize: "10px",
-    color: "#2E2E2E",
-  },
-  savedMsg: {
-    fontFamily: "'JetBrains Mono', monospace",
-    fontSize: "10px",
-    color: "#3A8F6A",
-  },
+  saveRow: { display: "flex", alignItems: "center", justifyContent: "space-between" },
+  charCount: { fontFamily: "'JetBrains Mono', monospace", fontSize: "10px", color: "#2A2A2A" },
+  savedMsg: { fontFamily: "'JetBrains Mono', monospace", fontSize: "10px", color: "#3A8F6A" },
   saveBtn: {
     background: "none",
     border: "1px solid #2A2A2A",
@@ -2023,7 +2166,6 @@ const ns = {
     letterSpacing: "2px",
     padding: "6px 16px",
     cursor: "pointer",
-    transition: "opacity 0.15s",
   },
   readWrap: {
     background: "#0D0D0D",
@@ -2044,8 +2186,92 @@ const ns = {
   emptyPast: {
     fontFamily: "'JetBrains Mono', monospace",
     fontSize: "11px",
-    color: "#2E2E2E",
+    color: "#2A2A2A",
     textAlign: "center",
     paddingTop: "40px",
+  },
+
+  // ── calendar view ──
+  calTopRow: {
+    display: "flex",
+    alignItems: "center",
+    justifyContent: "space-between",
+    marginBottom: "20px",
+  },
+  calMonthArrow: {
+    background: "none",
+    border: "none",
+    color: "#555",
+    fontSize: "24px",
+    cursor: "pointer",
+    padding: "4px 12px",
+    fontFamily: "'Inter', sans-serif",
+  },
+  calMonthLabel: {
+    fontFamily: "'Bebas Neue', sans-serif",
+    fontSize: "18px",
+    letterSpacing: "4px",
+    color: "#D8D4CE",
+  },
+  calDow: {
+    display: "grid",
+    gridTemplateColumns: "repeat(7, 1fr)",
+    marginBottom: "6px",
+  },
+  calDowCell: {
+    fontFamily: "'JetBrains Mono', monospace",
+    fontSize: "9px",
+    color: "#333",
+    textAlign: "center",
+    padding: "4px 0",
+    letterSpacing: "0.5px",
+  },
+  calGrid: {
+    display: "grid",
+    gridTemplateColumns: "repeat(7, 1fr)",
+    gap: "4px",
+    marginBottom: "24px",
+  },
+  calCell: {
+    position: "relative",
+    display: "flex",
+    flexDirection: "column",
+    alignItems: "center",
+    justifyContent: "center",
+    aspectRatio: "1",
+    background: "none",
+    border: "1px solid #181818",
+    borderRadius: "6px",
+    color: "#666",
+    fontFamily: "'Inter', sans-serif",
+    fontSize: "13px",
+    fontWeight: 500,
+    cursor: "pointer",
+    gap: "2px",
+  },
+  calCellToday: { border: "1px solid #D4A03C44", color: "#D4A03C" },
+  calCellTomorrow: { border: "1px solid #5B9BD544", color: "#5B9BD5" },
+  calCellFuture: { color: "#272727", cursor: "default", border: "1px solid #111" },
+  calCellSelected: { background: "#1A1A1A", border: "1px solid #D4A03C" },
+  calDot: {
+    width: "4px",
+    height: "4px",
+    borderRadius: "50%",
+    background: "#D4A03C",
+    position: "absolute",
+    bottom: "5px",
+  },
+  closeCal: {
+    display: "block",
+    width: "100%",
+    padding: "12px",
+    background: "none",
+    border: "1px solid #1E1E1E",
+    borderRadius: "6px",
+    color: "#3A3A3A",
+    fontFamily: "'Bebas Neue', sans-serif",
+    fontSize: "13px",
+    letterSpacing: "3px",
+    cursor: "pointer",
   },
 };

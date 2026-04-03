@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { TEMPLATES, ADD_ONS, CATEGORIES, shiftMissions, applyAddOns } from "./templates";
+import { TEMPLATES, ADD_ONS, CATEGORIES, shiftMissions, shiftWeekly, applyAddOnsToWeekly } from "./templates";
 
 export default function Onboarding({ onComplete }) {
   const [step, setStep] = useState(1);
@@ -16,13 +16,13 @@ export default function Onboarding({ onComplete }) {
     setActiveAddOns((prev) => (prev.includes(id) ? prev.filter((a) => a !== id) : [...prev, id]));
 
   const handleComplete = () => {
-    const shifted = shiftMissions(selected.missions, selected.defaultWakeTime, wakeTime);
-    const final = applyAddOns(shifted, activeAddOns, wakeTime);
-    onComplete({ templateId: selected.id, templateName: selected.name, wakeTime, addOns: activeAddOns, missions: final });
+    const shiftedWeekly = shiftWeekly(selected.weekly, selected.defaultWakeTime, wakeTime);
+    const finalWeekly = applyAddOnsToWeekly(shiftedWeekly, activeAddOns, wakeTime);
+    onComplete({ templateId: selected.id, templateName: selected.name, wakeTime, addOns: activeAddOns, weekly: finalWeekly });
   };
 
   const previewMissions = selected
-    ? shiftMissions(selected.missions, selected.defaultWakeTime, wakeTime).slice(0, 5)
+    ? shiftMissions(selected.weekly.monday, selected.defaultWakeTime, wakeTime).slice(0, 5)
     : [];
 
   return (
@@ -55,7 +55,7 @@ export default function Onboarding({ onComplete }) {
                 <div style={s.cardName}>{t.name}</div>
                 <div style={s.cardDesc}>{t.description}</div>
                 <div style={s.cardTagline}>{t.tagline}</div>
-                <div style={s.cardCount}>{t.missions.length} TASKS</div>
+                <div style={s.cardCount}>{t.weekly.monday.length} TASKS (WEEKDAY)</div>
               </div>
             ))}
           </div>

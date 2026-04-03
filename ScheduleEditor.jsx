@@ -1,16 +1,39 @@
 import { useState } from "react";
 import { CATEGORIES, timeToMinutes } from "./templates";
 
+const DAYS = ["monday", "tuesday", "wednesday", "thursday", "friday", "saturday", "sunday"];
+const DAY_LABELS = { monday: "MON", tuesday: "TUE", wednesday: "WED", thursday: "THU", friday: "FRI", saturday: "SAT", sunday: "SUN" };
 const BLANK_FORM = { label: "", time: "08:00", duration: 30, command: "", category: "work" };
 
-export default function ScheduleEditor({ missions: initial, onSave, onClose, onReset }) {
-  const [missions, setMissions] = useState([...initial]);
+export default function ScheduleEditor({ weekly: initial, onSave, onClose, onReset }) {
+  const todayDayName = DAYS[new Date().getDay() === 0 ? 6 : new Date().getDay() - 1];
+  const [weekly, setWeekly] = useState(() => {
+    const w = {};
+    for (const d of DAYS) w[d] = [...(initial[d] || [])];
+    return w;
+  });
+  const [activeDay, setActiveDay] = useState(todayDayName);
   const [editingId, setEditingId] = useState(null);
   const [form, setForm] = useState(BLANK_FORM);
   const [adding, setAdding] = useState(false);
   const [addForm, setAddForm] = useState(BLANK_FORM);
+  const [copyOpen, setCopyOpen] = useState(false);
+  const [copyTargets, setCopyTargets] = useState([]);
+  const [sameEveryDay, setSameEveryDay] = useState(false);
 
-  const sorted = [...missions].sort((a, b) => timeToMinutes(a.time) - timeToMinutes(b.time));
+  const sorted = [...(weekly[activeDay] || [])].sort((a, b) => timeToMinutes(a.time) - timeToMinutes(b.time));
+
+  const updateDay = (day, newMissions) =>
+    setWeekly(prev => ({ ...prev, [day]: newMissions.map((m, i) => ({ ...m, id: i + 1 })) }));
+
+  const updateActiveDay = (newMissions) => {
+    if (sameEveryDay) {
+      const reindexed = newMissions.map((m, i) => ({ ...m, id: i + 1 }));
+      setWeekly(() => Object.fromEntries(DAYS.map(d => [d, reindexed])));
+    } else {
+      updateDay(activeDay, newMissions);
+    }
+  };
 
   const startEdit = (m) => {
     setAdding(false);
@@ -19,25 +42,25 @@ export default function ScheduleEditor({ missions: initial, onSave, onClose, onR
   };
 
   const saveEdit = () => {
-    setMissions((prev) =>
-      prev.map((m) => (m.id === editingId ? { ...m, ...form, duration: Number(form.duration) } : m))
+    const updated = sorted.map(m =>
+      m.id === editingId ? { ...m, ...form, duration: Number(form.duration) } : m
     );
+    updateActiveDay(updated);
     setEditingId(null);
   };
 
   const deleteTask = (id) => {
-    setMissions((prev) => prev.filter((m) => m.id !== id).map((m, i) => ({ ...m, id: i + 1 })));
+    updateActiveDay(sorted.filter(m => m.id !== id));
     if (editingId === id) setEditingId(null);
   };
 
   const moveUp = (idx) => {
     if (idx === 0) return;
     const arr = [...sorted];
-    // Swap times
     const tmp = arr[idx].time;
     arr[idx] = { ...arr[idx], time: arr[idx - 1].time };
     arr[idx - 1] = { ...arr[idx - 1], time: tmp };
-    setMissions(arr.map((m, i) => ({ ...m, id: i + 1 })));
+    updateActiveDay(arr);
   };
 
   const moveDown = (idx) => {
@@ -46,17 +69,33 @@ export default function ScheduleEditor({ missions: initial, onSave, onClose, onR
     const tmp = arr[idx].time;
     arr[idx] = { ...arr[idx], time: arr[idx + 1].time };
     arr[idx + 1] = { ...arr[idx + 1], time: tmp };
-    setMissions(arr.map((m, i) => ({ ...m, id: i + 1 })));
+    updateActiveDay(arr);
   };
 
   const addTask = () => {
-    const newId = missions.length > 0 ? Math.max(...missions.map((m) => m.id)) + 1 : 1;
-    setMissions((prev) =>
-      [...prev, { ...addForm, id: newId, duration: Number(addForm.duration) }]
-        .map((m, i) => ({ ...m, id: i + 1 }))
-    );
+    const newId = (weekly[activeDay] || []).length > 0
+      ? Math.max(...(weekly[activeDay] || []).map(m => m.id)) + 1 : 1;
+    const combined = [...(weekly[activeDay] || []), { ...addForm, id: newId, duration: Number(addForm.duration) }];
+    updateActiveDay(combined);
     setAdding(false);
     setAddForm(BLANK_FORM);
+  };
+
+  const applyCopy = () => {
+    const src = weekly[activeDay];
+    const updated = { ...weekly };
+    for (const d of copyTargets) updated[d] = src.map((m, i) => ({ ...m, id: i + 1 }));
+    setWeekly(updated);
+    setCopyOpen(false);
+    setCopyTargets([]);
+  };
+
+  const toggleSameEveryDay = () => {
+    if (!sameEveryDay) {
+      const src = weekly[activeDay];
+      setWeekly(Object.fromEntries(DAYS.map(d => [d, src.map((m, i) => ({ ...m, id: i + 1 }))])));
+    }
+    setSameEveryDay(s => !s);
   };
 
   const Field = ({ label, children }) => (
@@ -66,22 +105,22 @@ export default function ScheduleEditor({ missions: initial, onSave, onClose, onR
     </div>
   );
 
-  const EditForm = ({ f, setF, onSave, onCancel }) => (
+  const EditForm = ({ f, setF, onSave: onS, onCancel }) => (
     <div style={s.editForm}>
       <Field label="LABEL">
-        <input style={s.input} value={f.label} onChange={(e) => setF({ ...f, label: e.target.value })} placeholder="TASK NAME" />
+        <input style={s.input} value={f.label} onChange={e => setF({ ...f, label: e.target.value })} placeholder="TASK NAME" />
       </Field>
       <div style={s.formRow}>
         <Field label="TIME">
-          <input type="time" style={s.input} value={f.time} onChange={(e) => setF({ ...f, time: e.target.value })} />
+          <input type="time" style={s.input} value={f.time} onChange={e => setF({ ...f, time: e.target.value })} />
         </Field>
         <Field label="DURATION (MIN)">
           <input type="number" style={s.input} value={f.duration} min="0" max="480"
-            onChange={(e) => setF({ ...f, duration: e.target.value })} />
+            onChange={e => setF({ ...f, duration: e.target.value })} />
         </Field>
       </div>
       <Field label="CATEGORY">
-        <select style={s.input} value={f.category} onChange={(e) => setF({ ...f, category: e.target.value })}>
+        <select style={s.input} value={f.category} onChange={e => setF({ ...f, category: e.target.value })}>
           {Object.entries(CATEGORIES).map(([key, val]) => (
             <option key={key} value={key}>{val.label}</option>
           ))}
@@ -89,10 +128,10 @@ export default function ScheduleEditor({ missions: initial, onSave, onClose, onR
       </Field>
       <Field label="COMMAND (INSTRUCTION TEXT)">
         <textarea style={{ ...s.input, ...s.textarea }} value={f.command}
-          onChange={(e) => setF({ ...f, command: e.target.value })} placeholder="What must be done." rows={2} />
+          onChange={e => setF({ ...f, command: e.target.value })} placeholder="What must be done." rows={2} />
       </Field>
       <div style={s.formBtnRow}>
-        <button style={s.saveBtn} onClick={onSave} disabled={!f.label.trim()}>SAVE</button>
+        <button style={s.saveBtn} onClick={onS} disabled={!f.label.trim()}>SAVE</button>
         <button style={s.cancelBtn} onClick={onCancel}>CANCEL</button>
       </div>
     </div>
@@ -105,14 +144,67 @@ export default function ScheduleEditor({ missions: initial, onSave, onClose, onR
       {/* Header */}
       <div style={s.header}>
         <div>
-          <div style={s.title}>YOUR SCHEDULE</div>
-          <div style={s.subtitle}>{sorted.length} tasks — edit, reorder, or delete any of them</div>
+          <div style={s.title}>WEEKLY SCHEDULE</div>
+          <div style={s.subtitle}>{sorted.length} tasks on {activeDay.toUpperCase()}</div>
         </div>
         <div style={s.headerBtns}>
           <button style={s.resetBtn} onClick={onReset}>RESET TO TEMPLATE</button>
           <button style={s.closeBtn} onClick={onClose}>✕</button>
         </div>
       </div>
+
+      {/* Day tabs */}
+      <div style={s.dayTabs}>
+        {DAYS.map(day => (
+          <button
+            key={day}
+            style={{ ...s.dayTab, ...(activeDay === day ? s.dayTabActive : {}) }}
+            onClick={() => { setActiveDay(day); setEditingId(null); setAdding(false); }}
+          >
+            {DAY_LABELS[day]}
+            <div style={{ ...s.dayTabDot, background: activeDay === day ? "#D4A03C" : "#2A2A2A" }} />
+          </button>
+        ))}
+      </div>
+
+      {/* Tools bar */}
+      <div style={s.toolBar}>
+        <button
+          style={{ ...s.toolBtn, ...(sameEveryDay ? s.toolBtnActive : {}) }}
+          onClick={toggleSameEveryDay}
+        >
+          {sameEveryDay ? "✓ " : ""}SAME EVERY DAY
+        </button>
+        <button style={s.toolBtn} onClick={() => { setCopyOpen(o => !o); setCopyTargets([]); }}>
+          COPY TO...
+        </button>
+      </div>
+
+      {/* Copy panel */}
+      {copyOpen && (
+        <div style={s.copyPanel}>
+          <div style={s.copyTitle}>COPY {activeDay.toUpperCase()} TO:</div>
+          <div style={s.copyDays}>
+            {DAYS.filter(d => d !== activeDay).map(d => (
+              <button
+                key={d}
+                style={{ ...s.copyDayBtn, ...(copyTargets.includes(d) ? s.copyDayBtnActive : {}) }}
+                onClick={() => setCopyTargets(prev => prev.includes(d) ? prev.filter(x => x !== d) : [...prev, d])}
+              >
+                {DAY_LABELS[d]}
+              </button>
+            ))}
+            <button
+              style={{ ...s.copyDayBtn, ...(copyTargets.length === 6 ? s.copyDayBtnActive : {}) }}
+              onClick={() => setCopyTargets(copyTargets.length === 6 ? [] : DAYS.filter(d => d !== activeDay))}
+            >ALL</button>
+          </div>
+          <div style={s.copyActions}>
+            <button style={s.saveBtn} disabled={copyTargets.length === 0} onClick={applyCopy}>APPLY COPY</button>
+            <button style={s.cancelBtn} onClick={() => { setCopyOpen(false); setCopyTargets([]); }}>CANCEL</button>
+          </div>
+        </div>
+      )}
 
       {/* Mission list */}
       <div style={s.list}>
@@ -143,7 +235,7 @@ export default function ScheduleEditor({ missions: initial, onSave, onClose, onR
         {/* Add task */}
         {adding ? (
           <div style={s.addBox}>
-            <div style={s.addTitle}>NEW TASK</div>
+            <div style={s.addTitle}>NEW TASK — {activeDay.toUpperCase()}</div>
             <EditForm f={addForm} setF={setAddForm} onSave={addTask} onCancel={() => { setAdding(false); setAddForm(BLANK_FORM); }} />
           </div>
         ) : (
@@ -155,8 +247,8 @@ export default function ScheduleEditor({ missions: initial, onSave, onClose, onR
 
       {/* Save bar */}
       <div style={s.saveBar}>
-        <button style={s.saveFinalBtn} onClick={() => onSave(missions)}>
-          SAVE SCHEDULE ({missions.length} TASKS)
+        <button style={s.saveFinalBtn} onClick={() => onSave(weekly)}>
+          SAVE SCHEDULE
         </button>
       </div>
     </div>
@@ -215,6 +307,99 @@ const s = {
     fontSize: "14px",
     cursor: "pointer",
   },
+
+  // Day tabs
+  dayTabs: {
+    display: "flex",
+    borderBottom: "1px solid #1A1A1A",
+    overflowX: "auto",
+  },
+  dayTab: {
+    flex: 1,
+    minWidth: "44px",
+    padding: "10px 4px 8px",
+    background: "none",
+    border: "none",
+    borderBottom: "2px solid transparent",
+    color: "#555",
+    fontFamily: "'Bebas Neue', sans-serif",
+    fontSize: "13px",
+    letterSpacing: "1px",
+    cursor: "pointer",
+    display: "flex",
+    flexDirection: "column",
+    alignItems: "center",
+    gap: "5px",
+  },
+  dayTabActive: {
+    color: "#D4A03C",
+    borderBottomColor: "#D4A03C",
+  },
+  dayTabDot: {
+    width: "4px",
+    height: "4px",
+    borderRadius: "50%",
+  },
+
+  // Tools bar
+  toolBar: {
+    display: "flex",
+    gap: "8px",
+    padding: "10px 16px",
+    borderBottom: "1px solid #1A1A1A",
+  },
+  toolBtn: {
+    padding: "6px 14px",
+    background: "transparent",
+    border: "1px solid #2A2A2A",
+    borderRadius: "4px",
+    color: "#666",
+    fontFamily: "'Bebas Neue', sans-serif",
+    fontSize: "11px",
+    letterSpacing: "2px",
+    cursor: "pointer",
+  },
+  toolBtnActive: {
+    border: "1px solid #D4A03C44",
+    color: "#D4A03C",
+    background: "#141209",
+  },
+
+  // Copy panel
+  copyPanel: {
+    background: "#0F0F0F",
+    border: "1px solid #2A2A2A",
+    margin: "0 16px",
+    borderRadius: "4px",
+    padding: "14px",
+    display: "flex",
+    flexDirection: "column",
+    gap: "10px",
+  },
+  copyTitle: {
+    fontFamily: "'Bebas Neue', sans-serif",
+    fontSize: "11px",
+    letterSpacing: "3px",
+    color: "#555",
+  },
+  copyDays: { display: "flex", gap: "6px", flexWrap: "wrap" },
+  copyDayBtn: {
+    padding: "6px 12px",
+    background: "transparent",
+    border: "1px solid #2A2A2A",
+    borderRadius: "3px",
+    color: "#555",
+    fontFamily: "'Bebas Neue', sans-serif",
+    fontSize: "12px",
+    letterSpacing: "1px",
+    cursor: "pointer",
+  },
+  copyDayBtnActive: {
+    border: "1px solid #D4A03C",
+    color: "#D4A03C",
+    background: "#141209",
+  },
+  copyActions: { display: "flex", gap: "8px" },
 
   // List
   list: {
@@ -302,6 +487,7 @@ const s = {
     fontFamily: "'JetBrains Mono', monospace",
     fontSize: "12px",
     outline: "none",
+    boxSizing: "border-box",
   },
   textarea: { resize: "vertical", minHeight: "52px" },
   formBtnRow: { display: "flex", gap: "8px" },
