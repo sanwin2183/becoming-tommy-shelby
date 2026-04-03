@@ -32,6 +32,17 @@ const RULES = [
 ];
 
 const todayKey = () => new Date().toISOString().slice(0, 10);
+const tomorrowKey = () => { const d = new Date(); d.setDate(d.getDate() + 1); return d.toISOString().slice(0, 10); };
+const offsetDay = (base, n) => { const d = new Date(base + "T00:00:00"); d.setDate(d.getDate() + n); return d.toISOString().slice(0, 10); };
+const formatNoteDate = (key) => {
+  const today = todayKey();
+  const tomorrow = tomorrowKey();
+  const d = new Date(key + "T00:00:00");
+  const label = d.toLocaleDateString("en-US", { weekday: "long", month: "long", day: "numeric" }).toUpperCase();
+  if (key === today) return { label, tag: "TODAY" };
+  if (key === tomorrow) return { label, tag: "TOMORROW" };
+  return { label, tag: null };
+};
 
 const defaultDayState = () => ({
   date: todayKey(),
@@ -71,6 +82,11 @@ export default function BecomingTommyShelby() {
   const lastNotifMinRef = useRef(-1);
   const [schedule, setSchedule] = useState(null); // null=loading, false=no schedule, object=loaded
   const [showEditor, setShowEditor] = useState(false);
+  const [notesDate, setNotesDate] = useState(todayKey());
+  const [notesContent, setNotesContent] = useState("");
+  const [notesOriginal, setNotesOriginal] = useState("");
+  const [notesLoading, setNotesLoading] = useState(false);
+  const [notesSavedMsg, setNotesSavedMsg] = useState("");
 
   // Clock
   useEffect(() => {
@@ -192,6 +208,37 @@ export default function BecomingTommyShelby() {
       .catch(() => {})
       .finally(() => setLeaderboardLoading(false));
   }, [view === "leaderboard" ? view : null, user]);
+
+  // Load note for the currently viewed date
+  useEffect(() => {
+    if (!user) return;
+    setNotesLoading(true);
+    setNotesContent("");
+    setNotesOriginal("");
+    (async () => {
+      try {
+        const snap = await getDoc(doc(db, "users", user.uid, "notes", notesDate));
+        const text = snap.exists() ? (snap.data().content || "") : "";
+        setNotesContent(text);
+        setNotesOriginal(text);
+      } catch {}
+      setNotesLoading(false);
+    })();
+  }, [user, notesDate]);
+
+  const saveNote = async () => {
+    if (!user) return;
+    try {
+      await setDoc(doc(db, "users", user.uid, "notes", notesDate), {
+        content: notesContent,
+        date: notesDate,
+        updatedAt: serverTimestamp(),
+      });
+      setNotesOriginal(notesContent);
+      setNotesSavedMsg("Saved.");
+      setTimeout(() => setNotesSavedMsg(""), 2000);
+    } catch {}
+  };
 
   // Save permanent debrief history when debrief is completed
   useEffect(() => {
@@ -478,6 +525,7 @@ export default function BecomingTommyShelby() {
           { key: "schedule", label: "SCHEDULE" },
           { key: "rules", label: "RULES" },
           { key: "debrief", label: "DEBRIEF" },
+          { key: "notes", label: "NOTES" },
           { key: "score", label: "SCORE" },
           { key: "leaderboard", label: "RANKS" },
           { key: "account", label: "ACCOUNT" },
@@ -494,7 +542,7 @@ export default function BecomingTommyShelby() {
 
       <main style={styles.main}>
         {/* ====== COMMAND VIEW ====== */}
-        {view === "command" && !urgeMode && mission && (
+        {view === "command" && !urgeMode && (
           <div style={styles.commandView}>
             <div style={{ ...styles.categoryTag, background: catColor(mission.category) }}>
               {mission.category.toUpperCase()}
@@ -751,6 +799,77 @@ export default function BecomingTommyShelby() {
             </div>
           </div>
         )}
+        {/* ====== NOTES VIEW ====== */}
+        {view === "notes" && (() => {
+          const today = todayKey();
+          const tomorrow = tomorrowKey();
+          const isEditable = notesDate === today || notesDate === tomorrow;
+          const isFuture = notesDate > tomorrow;
+          const { label: dateLabel, tag } = formatNoteDate(notesDate);
+          const isDirty = notesContent !== notesOriginal;
+          return (
+            <div style={ns.container}>
+              {/* Date navigation */}
+              <div style={ns.nav}>
+                <button style={ns.navArrow} onClick={() => setNotesDate(d => offsetDay(d, -1))}>‹</button>
+                <div style={ns.dateBlock}>
+                  {tag && <div style={{ ...ns.dateTag, color: tag === "TODAY" ? "#D4A03C" : "#5B9BD5" }}>{tag}</div>}
+                  <div style={ns.dateLabel}>{dateLabel}</div>
+                </div>
+                <button
+                  style={{ ...ns.navArrow, opacity: notesDate >= tomorrow ? 0.2 : 1 }}
+                  onClick={() => setNotesDate(d => offsetDay(d, 1))}
+                  disabled={notesDate >= tomorrow}
+                >›</button>
+              </div>
+
+              {notesDate !== today && (
+                <button style={ns.todayBtn} onClick={() => setNotesDate(today)}>JUMP TO TODAY</button>
+              )}
+
+              {/* Note area */}
+              {notesLoading ? (
+                <div style={ns.loading}>loading...</div>
+              ) : isFuture ? (
+                <div style={ns.blocked}>
+                  <div style={ns.blockedIcon}>—</div>
+                  <div style={ns.blockedText}>You can only write notes for today and tomorrow.</div>
+                </div>
+              ) : isEditable ? (
+                <div style={ns.editorWrap}>
+                  <textarea
+                    style={ns.textarea}
+                    value={notesContent}
+                    onChange={e => setNotesContent(e.target.value)}
+                    placeholder={notesDate === tomorrow
+                      ? "Plan tomorrow. What must get done? What will you do differently?"
+                      : "Capture today. What happened? What do you need to remember?"}
+                    spellCheck={false}
+                  />
+                  <div style={ns.saveRow}>
+                    {notesSavedMsg
+                      ? <span style={ns.savedMsg}>{notesSavedMsg}</span>
+                      : <span style={ns.charCount}>{notesContent.length} chars</span>
+                    }
+                    <button
+                      style={{ ...ns.saveBtn, opacity: isDirty ? 1 : 0.35, cursor: isDirty ? "pointer" : "default" }}
+                      onClick={saveNote}
+                      disabled={!isDirty}
+                    >SAVE</button>
+                  </div>
+                </div>
+              ) : (
+                <div style={ns.readWrap}>
+                  {notesContent
+                    ? <pre style={ns.readText}>{notesContent}</pre>
+                    : <div style={ns.emptyPast}>No notes for this day.</div>
+                  }
+                </div>
+              )}
+            </div>
+          );
+        })()}
+
         {/* ====== LEADERBOARD VIEW ====== */}
         {view === "leaderboard" && (
           <div style={styles.lbView}>
@@ -1768,5 +1887,165 @@ const styles = {
     fontSize: "8px",
     color: "#444",
     letterSpacing: "1px",
+  },
+};
+
+const ns = {
+  container: {
+    display: "flex",
+    flexDirection: "column",
+    gap: "0",
+    maxWidth: "620px",
+    margin: "0 auto",
+    width: "100%",
+    padding: "24px 20px 40px",
+    minHeight: "100%",
+  },
+  nav: {
+    display: "flex",
+    alignItems: "center",
+    justifyContent: "space-between",
+    marginBottom: "20px",
+  },
+  navArrow: {
+    background: "none",
+    border: "none",
+    color: "#555",
+    fontSize: "28px",
+    lineHeight: 1,
+    cursor: "pointer",
+    padding: "4px 10px",
+    fontFamily: "'Inter', sans-serif",
+    transition: "color 0.15s",
+  },
+  dateBlock: {
+    display: "flex",
+    flexDirection: "column",
+    alignItems: "center",
+    gap: "3px",
+    flex: 1,
+  },
+  dateTag: {
+    fontFamily: "'Bebas Neue', sans-serif",
+    fontSize: "11px",
+    letterSpacing: "3px",
+  },
+  dateLabel: {
+    fontFamily: "'Inter', sans-serif",
+    fontWeight: 600,
+    fontSize: "13px",
+    color: "#888",
+    letterSpacing: "0.5px",
+    textAlign: "center",
+  },
+  todayBtn: {
+    alignSelf: "center",
+    background: "none",
+    border: "1px solid #222",
+    borderRadius: "4px",
+    color: "#444",
+    fontFamily: "'Bebas Neue', sans-serif",
+    fontSize: "11px",
+    letterSpacing: "2px",
+    padding: "5px 12px",
+    cursor: "pointer",
+    marginBottom: "20px",
+  },
+  loading: {
+    fontFamily: "'JetBrains Mono', monospace",
+    fontSize: "11px",
+    color: "#333",
+    textAlign: "center",
+    marginTop: "60px",
+  },
+  blocked: {
+    display: "flex",
+    flexDirection: "column",
+    alignItems: "center",
+    gap: "12px",
+    marginTop: "60px",
+  },
+  blockedIcon: {
+    fontFamily: "'JetBrains Mono', monospace",
+    fontSize: "32px",
+    color: "#2A2A2A",
+  },
+  blockedText: {
+    fontFamily: "'JetBrains Mono', monospace",
+    fontSize: "11px",
+    color: "#333",
+    textAlign: "center",
+    lineHeight: 1.6,
+  },
+  editorWrap: {
+    display: "flex",
+    flexDirection: "column",
+    flex: 1,
+    gap: "12px",
+  },
+  textarea: {
+    flex: 1,
+    minHeight: "360px",
+    background: "#0D0D0D",
+    border: "1px solid #1C1C1C",
+    borderRadius: "6px",
+    color: "#D8D4CE",
+    fontFamily: "'Inter', sans-serif",
+    fontSize: "15px",
+    lineHeight: "1.75",
+    padding: "20px",
+    outline: "none",
+    resize: "none",
+    letterSpacing: "0.1px",
+  },
+  saveRow: {
+    display: "flex",
+    alignItems: "center",
+    justifyContent: "space-between",
+  },
+  charCount: {
+    fontFamily: "'JetBrains Mono', monospace",
+    fontSize: "10px",
+    color: "#2E2E2E",
+  },
+  savedMsg: {
+    fontFamily: "'JetBrains Mono', monospace",
+    fontSize: "10px",
+    color: "#3A8F6A",
+  },
+  saveBtn: {
+    background: "none",
+    border: "1px solid #2A2A2A",
+    borderRadius: "4px",
+    color: "#D4A03C",
+    fontFamily: "'Bebas Neue', sans-serif",
+    fontSize: "12px",
+    letterSpacing: "2px",
+    padding: "6px 16px",
+    cursor: "pointer",
+    transition: "opacity 0.15s",
+  },
+  readWrap: {
+    background: "#0D0D0D",
+    border: "1px solid #1C1C1C",
+    borderRadius: "6px",
+    padding: "20px",
+    minHeight: "200px",
+  },
+  readText: {
+    fontFamily: "'Inter', sans-serif",
+    fontSize: "15px",
+    lineHeight: "1.75",
+    color: "#888",
+    margin: 0,
+    whiteSpace: "pre-wrap",
+    wordBreak: "break-word",
+  },
+  emptyPast: {
+    fontFamily: "'JetBrains Mono', monospace",
+    fontSize: "11px",
+    color: "#2E2E2E",
+    textAlign: "center",
+    paddingTop: "40px",
   },
 };
