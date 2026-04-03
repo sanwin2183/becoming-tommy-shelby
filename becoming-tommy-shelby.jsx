@@ -967,7 +967,7 @@ export default function BecomingTommyShelby() {
                       }}>
                         {tag && <div style={{ ...ns.dateTag, color: tag === "TODAY" ? "#D4A03C" : "#5B9BD5" }}>{tag}</div>}
                         <div style={ns.dateLabel}>{dateLabel}</div>
-                        <div style={ns.calHint}>view calendar</div>
+                        <div style={ns.calHint}>📅 calendar</div>
                       </button>
                       <button
                         style={{ ...ns.navArrow, opacity: notesDate > today ? 0.2 : 1, cursor: notesDate > today ? "default" : "pointer" }}
@@ -2099,7 +2099,7 @@ const ns = {
   calHint: {
     fontFamily: "'JetBrains Mono', monospace",
     fontSize: "9px",
-    color: "#2A2A2A",
+    color: "#444",
     marginTop: "2px",
     letterSpacing: "0.5px",
   },
